@@ -1,4 +1,7 @@
+import { kv } from '@vercel/kv';
+
 const upstreamCooldown = new Map();
+const CONFIG_KEY = 'proxyapi:config:v1';
 
 function now() {
   return Date.now();
@@ -9,7 +12,7 @@ export function json(res, status, data, extraHeaders = {}) {
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('access-control-allow-origin', '*');
   res.setHeader('access-control-allow-headers', 'authorization,content-type,x-request-id');
-  res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  res.setHeader('access-control-allow-methods', 'GET,POST,PUT,OPTIONS');
   for (const [k, v] of Object.entries(extraHeaders)) {
     res.setHeader(k, v);
   }
@@ -29,8 +32,7 @@ export function requestId(req) {
 
 function parseJsonSafe(raw, fallback) {
   try {
-    const v = JSON.parse(raw);
-    return v;
+    return JSON.parse(raw);
   } catch {
     return fallback;
   }
@@ -39,6 +41,69 @@ function parseJsonSafe(raw, fallback) {
 function normalizeModelList(models) {
   if (!Array.isArray(models)) return [];
   return models.filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim());
+}
+
+function normalizeUpstream(x) {
+  if (!x || !x.name || !x.baseUrl || !x.apiKey) return null;
+  return {
+    name: String(x.name),
+    baseUrl: String(x.baseUrl).replace(/\/$/, ''),
+    apiKey: String(x.apiKey),
+    models: normalizeModelList(x.models),
+    weight: Number.isFinite(Number(x.weight)) ? Math.max(1, Number(x.weight)) : 1,
+    timeoutMs: Number.isFinite(Number(x.timeoutMs)) ? Math.max(2000, Number(x.timeoutMs)) : 30000,
+    headers: x.headers && typeof x.headers === 'object' ? x.headers : {},
+  };
+}
+
+function normalizeConfig(rawCfg) {
+  const cfg = rawCfg && typeof rawCfg === 'object' ? rawCfg : {};
+  const upstreams = Array.isArray(cfg.upstreams) ? cfg.upstreams.map(normalizeUpstream).filter(Boolean) : [];
+  return {
+    defaultModel: typeof cfg.defaultModel === 'string' && cfg.defaultModel.trim() ? cfg.defaultModel.trim() : (process.env.DEFAULT_MODEL || 'gpt-4o-mini'),
+    maxAttempts: Number.isFinite(Number(cfg.maxAttempts)) ? Math.max(1, Number(cfg.maxAttempts)) : Number(process.env.MAX_ATTEMPTS || 2),
+    cooldownMs: Number.isFinite(Number(cfg.cooldownMs)) ? Math.max(5000, Number(cfg.cooldownMs)) : Number(process.env.UPSTREAM_COOLDOWN_MS || 30000),
+    upstreams,
+    updatedAt: cfg.updatedAt || new Date().toISOString(),
+  };
+}
+
+function envFallbackConfig() {
+  const parsed = parseJsonSafe(process.env.UPSTREAMS_JSON || '[]', []);
+  const upstreams = Array.isArray(parsed) ? parsed.map(normalizeUpstream).filter(Boolean) : [];
+  return normalizeConfig({
+    defaultModel: process.env.DEFAULT_MODEL || 'gpt-4o-mini',
+    maxAttempts: Number(process.env.MAX_ATTEMPTS || 2),
+    cooldownMs: Number(process.env.UPSTREAM_COOLDOWN_MS || 30000),
+    upstreams,
+  });
+}
+
+export async function loadRuntimeConfig() {
+  // 没配置 KV 时，直接走环境变量
+  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
+    return envFallbackConfig();
+  }
+
+  try {
+    const stored = await kv.get(CONFIG_KEY);
+    if (!stored) return envFallbackConfig();
+    return normalizeConfig(stored);
+  } catch {
+    return envFallbackConfig();
+  }
+}
+
+export async function saveRuntimeConfig(input) {
+  const cfg = normalizeConfig(input);
+  cfg.updatedAt = new Date().toISOString();
+
+  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
+    return { ok: false, reason: 'kv_not_configured', config: cfg };
+  }
+
+  await kv.set(CONFIG_KEY, cfg);
+  return { ok: true, config: cfg };
 }
 
 export function parseGatewayTokens() {
@@ -65,25 +130,11 @@ export function checkAuth(req) {
   return tokens.has(token);
 }
 
-export function parseUpstreams() {
-  const raw = process.env.UPSTREAMS_JSON || '[]';
-  const parsed = parseJsonSafe(raw, []);
-  if (!Array.isArray(parsed)) return [];
-
-  return parsed
-    .map((x) => {
-      if (!x || !x.name || !x.baseUrl || !x.apiKey) return null;
-      return {
-        name: String(x.name),
-        baseUrl: String(x.baseUrl).replace(/\/$/, ''),
-        apiKey: String(x.apiKey),
-        models: normalizeModelList(x.models),
-        weight: Number.isFinite(Number(x.weight)) ? Math.max(1, Number(x.weight)) : 1,
-        timeoutMs: Number.isFinite(Number(x.timeoutMs)) ? Math.max(2000, Number(x.timeoutMs)) : 30000,
-        headers: x.headers && typeof x.headers === 'object' ? x.headers : {},
-      };
-    })
-    .filter(Boolean);
+export function checkAdmin(req) {
+  const adminToken = (process.env.ADMIN_TOKEN || '').trim();
+  if (!adminToken) return false;
+  const auth = req.headers.authorization || '';
+  return auth === `Bearer ${adminToken}`;
 }
 
 function availableUpstreams(model, all, cooldownMs) {
@@ -107,10 +158,10 @@ function weightedPick(list) {
   return list[list.length - 1];
 }
 
-function sortCandidates(model, ups) {
-  const cooldownMs = Number(process.env.UPSTREAM_COOLDOWN_MS || 30000);
-  const avail = availableUpstreams(model, ups, cooldownMs);
-  const pool = avail.length ? avail : ups;
+function sortCandidates(model, cfg) {
+  const cooldownMs = cfg.cooldownMs || 30000;
+  const avail = availableUpstreams(model, cfg.upstreams, cooldownMs);
+  const pool = avail.length ? avail : cfg.upstreams;
 
   const first = weightedPick(pool);
   if (!first) return [];
@@ -118,7 +169,7 @@ function sortCandidates(model, ups) {
   const rest = pool.filter((u) => u.name !== first.name);
   rest.sort((a, b) => (b.weight || 1) - (a.weight || 1));
 
-  const maxAttempts = Math.max(1, Number(process.env.MAX_ATTEMPTS || 2));
+  const maxAttempts = cfg.maxAttempts || 2;
   return [first, ...rest].slice(0, maxAttempts);
 }
 
@@ -128,14 +179,14 @@ function normalizeBody(inputBody) {
 }
 
 export async function forwardChat(inputBody, opts = {}) {
+  const cfg = await loadRuntimeConfig();
   const body = normalizeBody(inputBody);
-  const model = body.model || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
+  const model = body.model || cfg.defaultModel || 'gpt-4o-mini';
   body.model = model;
 
-  const ups = parseUpstreams();
-  if (!ups.length) return { status: 500, data: { error: 'no_upstream_configured' } };
+  if (!cfg.upstreams.length) return { status: 500, data: { error: 'no_upstream_configured' } };
 
-  const candidates = sortCandidates(model, ups);
+  const candidates = sortCandidates(model, cfg);
   if (!candidates.length) return { status: 503, data: { error: 'no_upstream_available' } };
 
   const requestIdValue = opts.requestId || `r_${Date.now()}`;
@@ -163,7 +214,7 @@ export async function forwardChat(inputBody, opts = {}) {
       if (!resp.ok) {
         lastErr = `${up.name}:${resp.status}`;
         if (resp.status >= 500 || resp.status === 429) {
-          upstreamCooldown.set(up.name, now() + Number(process.env.UPSTREAM_COOLDOWN_MS || 30000));
+          upstreamCooldown.set(up.name, now() + cfg.cooldownMs);
         }
         continue;
       }
@@ -188,25 +239,25 @@ export async function forwardChat(inputBody, opts = {}) {
     } catch (e) {
       clearTimeout(timer);
       lastErr = `${up.name}:${e?.name === 'AbortError' ? 'timeout' : 'network_error'}`;
-      upstreamCooldown.set(up.name, now() + Number(process.env.UPSTREAM_COOLDOWN_MS || 30000));
+      upstreamCooldown.set(up.name, now() + cfg.cooldownMs);
     }
   }
 
   return { status: 502, data: { error: 'upstream_failed', detail: lastErr } };
 }
 
-export function buildModelList() {
-  const ups = parseUpstreams();
+export async function buildModelList() {
+  const cfg = await loadRuntimeConfig();
   const models = new Map();
-  for (const up of ups) {
+  for (const up of cfg.upstreams) {
     for (const m of up.models || []) {
       if (!models.has(m)) models.set(m, []);
       models.get(m).push(up.name);
     }
   }
 
-  if (!models.size && process.env.DEFAULT_MODEL) {
-    models.set(process.env.DEFAULT_MODEL, ['default']);
+  if (!models.size && cfg.defaultModel) {
+    models.set(cfg.defaultModel, ['default']);
   }
 
   return Array.from(models.entries()).map(([id, providers]) => ({
@@ -217,23 +268,24 @@ export function buildModelList() {
   }));
 }
 
-export function adminHealth() {
-  const ups = parseUpstreams();
+export async function adminHealth() {
+  const cfg = await loadRuntimeConfig();
   const cooldown = {};
   const t = now();
-  for (const up of ups) {
+  for (const up of cfg.upstreams) {
     const until = upstreamCooldown.get(up.name) || 0;
     cooldown[up.name] = until > t ? until - t : 0;
   }
 
   return {
     ok: true,
-    upstreamCount: ups.length,
+    upstreamCount: cfg.upstreams.length,
     defaults: {
-      defaultModel: process.env.DEFAULT_MODEL || 'gpt-4o-mini',
-      maxAttempts: Number(process.env.MAX_ATTEMPTS || 2),
-      cooldownMs: Number(process.env.UPSTREAM_COOLDOWN_MS || 30000),
+      defaultModel: cfg.defaultModel,
+      maxAttempts: cfg.maxAttempts,
+      cooldownMs: cfg.cooldownMs,
     },
+    updatedAt: cfg.updatedAt,
     cooldown,
   };
 }

@@ -9,6 +9,6 @@ export default async function handler(req, res) {
 
   return json(res, 200, {
     object: 'list',
-    data: buildModelList(),
+    data: await buildModelList(),
   });
 }
