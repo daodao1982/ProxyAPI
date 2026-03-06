@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	log "github.com/sirupsen/logrus"
 )
 
 type apiKeyLifecycleRequest struct {
@@ -102,7 +102,7 @@ func (h *Handler) SetAPIKeyLifecycle(c *gin.Context) {
 	if !h.persist(c) {
 		return
 	}
-	logging.Debugf("api key lifecycle set for key=%s preset=%s", maskKey(key), *preset)
+	log.Debugf("api key lifecycle set for key=%s preset=%s", maskKey(key), *preset)
 	_ = entry
 }
 
@@ -136,7 +136,7 @@ func (h *Handler) DisableAPIKey(c *gin.Context) {
 	if !h.persist(c) {
 		return
 	}
-	logging.Debugf("api key disabled key=%s", maskKey(key))
+	log.Debugf("api key disabled key=%s", maskKey(key))
 }
 
 func (h *Handler) EnableAPIKey(c *gin.Context) {
@@ -170,7 +170,7 @@ func (h *Handler) EnableAPIKey(c *gin.Context) {
 	if !h.persist(c) {
 		return
 	}
-	logging.Debugf("api key enabled key=%s", maskKey(key))
+	log.Debugf("api key enabled key=%s", maskKey(key))
 }
 
 func (h *Handler) DeleteAPIKeyLifecycle(c *gin.Context) {
@@ -191,7 +191,7 @@ func (h *Handler) DeleteAPIKeyLifecycle(c *gin.Context) {
 	if !h.persist(c) {
 		return
 	}
-	logging.Debugf("api key lifecycle deleted key=%s", maskKey(key))
+	log.Debugf("api key lifecycle deleted key=%s", maskKey(key))
 }
 
 func maskKey(s string) string {

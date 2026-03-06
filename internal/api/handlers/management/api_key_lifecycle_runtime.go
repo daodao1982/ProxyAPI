@@ -3,7 +3,7 @@ package management
 import (
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	log "github.com/sirupsen/logrus"
 )
 
 func (h *Handler) startAPIKeyLifecycleWorker() {
@@ -26,7 +26,7 @@ func (h *Handler) applyExpiredAPIKeys() {
 	now := time.Now().UTC()
 	expiredKeys, err := h.keyLifecycle.disableExpired(now)
 	if err != nil {
-		logging.Warnf("api key lifecycle: disableExpired failed: %v", err)
+		log.Warnf("api key lifecycle: disableExpired failed: %v", err)
 		return
 	}
 	if len(expiredKeys) == 0 {
@@ -45,8 +45,8 @@ func (h *Handler) applyExpiredAPIKeys() {
 		return
 	}
 	if err := h.persistNoResponse(); err != nil {
-		logging.Errorf("api key lifecycle: persist failed: %v", err)
+		log.Errorf("api key lifecycle: persist failed: %v", err)
 		return
 	}
-	logging.Infof("api key lifecycle: disabled %d expired keys", len(expiredKeys))
+	log.Infof("api key lifecycle: disabled %d expired keys", len(expiredKeys))
 }
