@@ -48,6 +48,7 @@ type Handler struct {
 	envSecret           string
 	logDir              string
 	postAuthHook        coreauth.PostAuthHook
+	keyLifecycle        *apiKeyLifecycleStore
 }
 
 // NewHandler creates a new management handler instance.
@@ -64,8 +65,10 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		tokenStore:          sdkAuth.GetTokenStore(),
 		allowRemoteOverride: envSecret != "",
 		envSecret:           envSecret,
+		keyLifecycle:        newAPIKeyLifecycleStore(configFilePath),
 	}
 	h.startAttemptCleanup()
+	h.startAPIKeyLifecycleWorker()
 	return h
 }
 
@@ -276,13 +279,23 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 func (h *Handler) persist(c *gin.Context) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// Preserve comments when writing
-	if err := config.SaveConfigPreserveComments(h.configFilePath, h.cfg); err != nil {
+	if err := h.persistLocked(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config: %v", err)})
 		return false
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true
+}
+
+func (h *Handler) persistLocked() error {
+	// Preserve comments when writing
+	return config.SaveConfigPreserveComments(h.configFilePath, h.cfg)
+}
+
+func (h *Handler) persistNoResponse() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.persistLocked()
 }
 
 // Helper methods for simple types
