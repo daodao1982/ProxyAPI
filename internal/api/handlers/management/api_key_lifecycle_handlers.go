@@ -3,6 +3,7 @@ package management
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,10 +12,11 @@ import (
 )
 
 type apiKeyLifecycleRequest struct {
-	Key       string  `json:"key"`
-	Preset    string  `json:"preset"`
-	ExpiresAt *string `json:"expiresAt,omitempty"`
-	Label     string  `json:"label,omitempty"`
+	Key       string   `json:"key"`
+	Preset    string   `json:"preset"`
+	ExpiresAt *string  `json:"expiresAt,omitempty"`
+	Label     string   `json:"label,omitempty"`
+	Models    []string `json:"models,omitempty"`
 }
 
 type apiKeyEnableRequest struct {
@@ -83,10 +85,12 @@ func (h *Handler) SetAPIKeyLifecycle(c *gin.Context) {
 		return
 	}
 
+	normalizedModels := normalizeModelList(req.Models)
 	entry, err := h.keyLifecycle.upsert(key, func(e *apiKeyLifecycleEntry, now time.Time) {
 		e.Label = strings.TrimSpace(req.Label)
 		e.Preset = *preset
 		e.ExpiresAt = expiresAt
+		e.Models = normalizedModels
 		e.Disabled = false
 		e.DisabledReason = ""
 		e.DisabledAt = nil
@@ -219,5 +223,29 @@ func removeString(arr []string, value string) []string {
 		}
 		out = append(out, item)
 	}
+	return out
+}
+
+func normalizeModelList(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		trimmed := strings.TrimSpace(model)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
 	return out
 }

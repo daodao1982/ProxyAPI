@@ -5,10 +5,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -326,7 +329,7 @@ func (s *Server) setupRoutes() {
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
-	v1.Use(AuthMiddleware(s.accessManager))
+	v1.Use(AuthMiddleware(s.accessManager), s.apiKeyModelGuardMiddleware())
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
@@ -340,7 +343,7 @@ func (s *Server) setupRoutes() {
 
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
-	v1beta.Use(AuthMiddleware(s.accessManager))
+	v1beta.Use(AuthMiddleware(s.accessManager), s.apiKeyModelGuardMiddleware())
 	{
 		v1beta.GET("/models", geminiHandlers.GeminiModels)
 		v1beta.POST("/models/*action", geminiHandlers.GeminiHandler)
@@ -1057,4 +1060,75 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 		}
 		c.AbortWithStatusJSON(statusCode, gin.H{"error": err.Message})
 	}
+}
+
+func (s *Server) apiKeyModelGuardMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s == nil || s.mgmt == nil {
+			c.Next()
+			return
+		}
+
+		v, exists := c.Get("apiKey")
+		if !exists {
+			c.Next()
+			return
+		}
+		apiKey := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if apiKey == "" {
+			c.Next()
+			return
+		}
+
+		allowed := s.mgmt.GetAPIKeyAllowedModels(apiKey)
+		if len(allowed) == 0 {
+			c.Next()
+			return
+		}
+
+		requested := extractRequestedModel(c)
+		if requested == "" {
+			c.Next()
+			return
+		}
+		for _, model := range allowed {
+			if strings.TrimSpace(model) == requested {
+				c.Next()
+				return
+			}
+		}
+
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":           "model not allowed for this api key",
+			"requested_model": requested,
+			"allowed_models":  allowed,
+		})
+	}
+}
+
+func extractRequestedModel(c *gin.Context) string {
+	if c == nil || c.Request == nil || c.Request.Body == nil {
+		return ""
+	}
+	if c.Request.Method != http.MethodPost && c.Request.Method != http.MethodPut && c.Request.Method != http.MethodPatch {
+		return ""
+	}
+
+	contentType := strings.ToLower(c.GetHeader("Content-Type"))
+	if !strings.Contains(contentType, "application/json") {
+		return ""
+	}
+
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil || len(bodyBytes) == 0 {
+		return ""
+	}
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	var payload map[string]any
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		return ""
+	}
+	model, _ := payload["model"].(string)
+	return strings.TrimSpace(model)
 }

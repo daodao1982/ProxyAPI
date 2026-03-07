@@ -137,6 +137,30 @@ func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) {
 	h.postAuthHook = hook
 }
 
+// GetAPIKeyAllowedModels returns the per-key model allowlist configured in lifecycle metadata.
+// nil/empty means unrestricted.
+func (h *Handler) GetAPIKeyAllowedModels(apiKey string) []string {
+	if h == nil || h.keyLifecycle == nil {
+		return nil
+	}
+	entry, ok := h.keyLifecycle.get(strings.TrimSpace(apiKey))
+	if !ok || entry == nil || len(entry.Models) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(entry.Models))
+	for _, model := range entry.Models {
+		trimmed := strings.TrimSpace(model)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.
 // Additionally, remote access requires allow-remote-management=true.

@@ -23,6 +23,7 @@ type apiKeyLifecycleEntry struct {
 	Label          string     `json:"label,omitempty"`
 	Preset         string     `json:"preset,omitempty"`
 	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
+	Models         []string   `json:"models,omitempty"`
 	Disabled       bool       `json:"disabled"`
 	DisabledReason string     `json:"disabledReason,omitempty"`
 	DisabledAt     *time.Time `json:"disabledAt,omitempty"`
