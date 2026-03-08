@@ -5,7 +5,10 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,9 +20,89 @@ import (
 
 var statisticsEnabled atomic.Bool
 
+const defaultSnapshotFileName = ".usage_statistics.json"
+
+type usagePersistence struct {
+	path string
+	mu   sync.Mutex
+}
+
+func newUsagePersistence() *usagePersistence {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return nil
+	}
+	baseDir := filepath.Join(homeDir, ".cli-proxy-api")
+	if mkErr := os.MkdirAll(baseDir, 0o700); mkErr != nil {
+		return nil
+	}
+	return &usagePersistence{path: filepath.Join(baseDir, defaultSnapshotFileName)}
+}
+
+func (p *usagePersistence) LoadInto(stats *RequestStatistics) {
+	if p == nil || stats == nil || strings.TrimSpace(p.path) == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	data, err := os.ReadFile(p.path)
+	if err != nil {
+		return
+	}
+
+	var payload usageImportPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return
+	}
+	if payload.Version != 0 && payload.Version != 1 {
+		return
+	}
+	stats.MergeSnapshot(payload.Usage)
+}
+
+func (p *usagePersistence) SaveFrom(stats *RequestStatistics) error {
+	if p == nil || stats == nil || strings.TrimSpace(p.path) == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	payload := usageExportPayload{
+		Version:    1,
+		ExportedAt: time.Now().UTC(),
+		Usage:      stats.Snapshot(),
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmpPath := p.path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, p.path)
+}
+
+var usageStore = newUsagePersistence()
+
 func init() {
 	statisticsEnabled.Store(true)
+	if usageStore != nil {
+		usageStore.LoadInto(defaultRequestStatistics)
+	}
 	coreusage.RegisterPlugin(NewLoggerPlugin())
+}
+
+type usageExportPayload struct {
+	Version    int                `json:"version"`
+	ExportedAt time.Time          `json:"exported_at"`
+	Usage      StatisticsSnapshot `json:"usage"`
+}
+
+type usageImportPayload struct {
+	Version int                `json:"version"`
+	Usage   StatisticsSnapshot `json:"usage"`
 }
 
 // LoggerPlugin collects in-memory request statistics for usage analysis.
@@ -48,6 +131,9 @@ func (p *LoggerPlugin) HandleUsage(ctx context.Context, record coreusage.Record)
 		return
 	}
 	p.stats.Record(ctx, record)
+	if usageStore != nil {
+		_ = usageStore.SaveFrom(p.stats)
+	}
 }
 
 // SetStatisticsEnabled toggles whether in-memory statistics are recorded.
@@ -55,6 +141,14 @@ func SetStatisticsEnabled(enabled bool) { statisticsEnabled.Store(enabled) }
 
 // StatisticsEnabled reports the current recording state.
 func StatisticsEnabled() bool { return statisticsEnabled.Load() }
+
+// PersistNow flushes current usage statistics to disk when persistence is configured.
+func PersistNow() error {
+	if usageStore == nil {
+		return nil
+	}
+	return usageStore.SaveFrom(defaultRequestStatistics)
+}
 
 // RequestStatistics maintains aggregated request metrics in memory.
 type RequestStatistics struct {
