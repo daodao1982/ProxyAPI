@@ -167,7 +167,7 @@ func (m *AmpModule) registerManagementRoutes(engine *gin.Engine, baseHandler *ha
 	}
 
 	// Inject client API key into request context for per-client upstream routing
-	ampAPI.Use(clientAPIKeyMiddleware())
+	ampAPI.Use(clientAPIKeyMiddleware(m.allowedModelsResolver))
 
 	// Dynamic proxy handler that uses m.getProxy() for hot-reload support
 	proxyHandler := func(c *gin.Context) {
@@ -216,7 +216,7 @@ func (m *AmpModule) registerManagementRoutes(engine *gin.Engine, baseHandler *ha
 		rootMiddleware = append(rootMiddleware, authWithBypass)
 	}
 	// Add clientAPIKeyMiddleware after auth for per-client upstream routing
-	rootMiddleware = append(rootMiddleware, clientAPIKeyMiddleware())
+	rootMiddleware = append(rootMiddleware, clientAPIKeyMiddleware(m.allowedModelsResolver))
 	engine.GET("/threads", append(rootMiddleware, proxyHandler)...)
 	engine.GET("/threads/*path", append(rootMiddleware, proxyHandler)...)
 	engine.GET("/docs", append(rootMiddleware, proxyHandler)...)
