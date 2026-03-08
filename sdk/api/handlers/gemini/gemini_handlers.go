@@ -49,7 +49,7 @@ func (h *GeminiAPIHandler) Models() []map[string]any {
 // It returns a JSON response containing available Gemini models and their specifications.
 func (h *GeminiAPIHandler) GeminiModels(c *gin.Context) {
 	rawModels := h.Models()
-	normalizedModels := make([]map[string]any, 0, len(rawModels))
+	normalizedByName := make(map[string]map[string]any, len(rawModels))
 	defaultMethods := []string{"generateContent"}
 	for _, model := range rawModels {
 		normalizedModel := make(map[string]any, len(model))
@@ -57,21 +57,59 @@ func (h *GeminiAPIHandler) GeminiModels(c *gin.Context) {
 			normalizedModel[k] = v
 		}
 		if name, ok := normalizedModel["name"].(string); ok && name != "" {
-			if !strings.HasPrefix(name, "models/") {
-				normalizedModel["name"] = "models/" + name
-			}
+			baseName := strings.TrimPrefix(name, "models/")
+			normalizedModel["name"] = "models/" + baseName
 			if displayName, _ := normalizedModel["displayName"].(string); displayName == "" {
-				normalizedModel["displayName"] = name
+				normalizedModel["displayName"] = baseName
 			}
 			if description, _ := normalizedModel["description"].(string); description == "" {
-				normalizedModel["description"] = name
+				normalizedModel["description"] = baseName
 			}
+			normalizedByName[baseName] = normalizedModel
 		}
 		if _, ok := normalizedModel["supportedGenerationMethods"]; !ok {
 			normalizedModel["supportedGenerationMethods"] = defaultMethods
 		}
-		normalizedModels = append(normalizedModels, normalizedModel)
 	}
+
+	allowedList := make([]string, 0)
+	if v, ok := c.Get("apiKeyAllowedModels"); ok {
+		if allowed, ok := v.([]string); ok {
+			seen := map[string]struct{}{}
+			for _, item := range allowed {
+				trimmed := strings.TrimSpace(strings.TrimPrefix(item, "models/"))
+				if trimmed == "" {
+					continue
+				}
+				if _, exists := seen[trimmed]; exists {
+					continue
+				}
+				seen[trimmed] = struct{}{}
+				allowedList = append(allowedList, trimmed)
+			}
+		}
+	}
+
+	normalizedModels := make([]map[string]any, 0, len(rawModels))
+	if len(allowedList) > 0 {
+		for _, allowedModel := range allowedList {
+			if model, ok := normalizedByName[allowedModel]; ok {
+				normalizedModels = append(normalizedModels, model)
+				continue
+			}
+			normalizedModels = append(normalizedModels, map[string]any{
+				"name":                       "models/" + allowedModel,
+				"displayName":                allowedModel,
+				"description":                allowedModel,
+				"supportedGenerationMethods": defaultMethods,
+			})
+		}
+	} else {
+		for _, model := range normalizedByName {
+			normalizedModels = append(normalizedModels, model)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"models": normalizedModels,
 	})
