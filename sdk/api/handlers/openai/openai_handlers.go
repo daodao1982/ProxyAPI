@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
@@ -63,6 +64,7 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 	// Get all available models
 	allModels := h.Models()
 
+	allowedList := make([]string, 0)
 	allowedSet := map[string]struct{}{}
 	if v, ok := c.Get("apiKeyAllowedModels"); ok {
 		if allowed, ok := v.([]string); ok {
@@ -71,36 +73,58 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 				if trimmed == "" {
 					continue
 				}
+				if _, exists := allowedSet[trimmed]; exists {
+					continue
+				}
 				allowedSet[trimmed] = struct{}{}
+				allowedList = append(allowedList, trimmed)
 			}
 		}
 	}
 
-	filteredModels := make([]map[string]any, 0, len(allModels))
+	modelByID := make(map[string]map[string]any, len(allModels))
 	for _, model := range allModels {
 		id, _ := model["id"].(string)
-		if len(allowedSet) > 0 {
-			if _, exists := allowedSet[strings.TrimSpace(id)]; !exists {
-				continue
-			}
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
 		}
+		modelByID[trimmed] = model
+	}
 
+	filteredModels := make([]map[string]any, 0, len(allModels))
+	appendModel := func(model map[string]any) {
 		filteredModel := map[string]any{
 			"id":     model["id"],
 			"object": model["object"],
 		}
-
-		// Add created field if it exists
 		if created, exists := model["created"]; exists {
 			filteredModel["created"] = created
 		}
-
-		// Add owned_by field if it exists
 		if ownedBy, exists := model["owned_by"]; exists {
 			filteredModel["owned_by"] = ownedBy
 		}
-
 		filteredModels = append(filteredModels, filteredModel)
+	}
+
+	if len(allowedList) > 0 {
+		now := time.Now().Unix()
+		for _, allowedModel := range allowedList {
+			if model, ok := modelByID[allowedModel]; ok {
+				appendModel(model)
+				continue
+			}
+			appendModel(map[string]any{
+				"id":       allowedModel,
+				"object":   "model",
+				"created":  now,
+				"owned_by": "proxyapi",
+			})
+		}
+	} else {
+		for _, model := range allModels {
+			appendModel(model)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

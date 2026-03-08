@@ -132,6 +132,7 @@ func (h *ClaudeCodeAPIHandler) ClaudeCountTokens(c *gin.Context) {
 func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
 	models := h.Models()
 
+	allowedList := make([]string, 0)
 	allowedSet := map[string]struct{}{}
 	if v, ok := c.Get("apiKeyAllowedModels"); ok {
 		if allowed, ok := v.([]string); ok {
@@ -140,20 +141,40 @@ func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
 				if trimmed == "" {
 					continue
 				}
+				if _, exists := allowedSet[trimmed]; exists {
+					continue
+				}
 				allowedSet[trimmed] = struct{}{}
+				allowedList = append(allowedList, trimmed)
 			}
 		}
 	}
 
-	filteredModels := make([]map[string]any, 0, len(models))
+	modelByID := make(map[string]map[string]any, len(models))
 	for _, model := range models {
 		id, _ := model["id"].(string)
-		if len(allowedSet) > 0 {
-			if _, exists := allowedSet[strings.TrimSpace(id)]; !exists {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		modelByID[trimmed] = model
+	}
+
+	filteredModels := make([]map[string]any, 0, len(models))
+	if len(allowedList) > 0 {
+		for _, allowedModel := range allowedList {
+			if model, ok := modelByID[allowedModel]; ok {
+				filteredModels = append(filteredModels, model)
 				continue
 			}
+			filteredModels = append(filteredModels, map[string]any{
+				"id":       allowedModel,
+				"object":   "model",
+				"owned_by": "proxyapi",
+			})
 		}
-		filteredModels = append(filteredModels, model)
+	} else {
+		filteredModels = append(filteredModels, models...)
 	}
 
 	firstID := ""
