@@ -39,7 +39,18 @@ type apiKeyLifecycleStore struct {
 
 func newAPIKeyLifecycleStore(configFilePath string) *apiKeyLifecycleStore {
 	storePath := ""
-	if strings.TrimSpace(configFilePath) != "" {
+
+	// Prefer persistent auth directory under user home (usually mounted in Docker):
+	//   ~/.cli-proxy-api/.api_key_lifecycle.json
+	if homeDir, err := os.UserHomeDir(); err == nil && strings.TrimSpace(homeDir) != "" {
+		candidateDir := filepath.Join(homeDir, ".cli-proxy-api")
+		if mkErr := os.MkdirAll(candidateDir, 0o700); mkErr == nil {
+			storePath = filepath.Join(candidateDir, ".api_key_lifecycle.json")
+		}
+	}
+
+	// Fallback to config directory for non-standard environments.
+	if storePath == "" && strings.TrimSpace(configFilePath) != "" {
 		dir := filepath.Dir(configFilePath)
 		storePath = filepath.Join(dir, ".api_key_lifecycle.json")
 	}
