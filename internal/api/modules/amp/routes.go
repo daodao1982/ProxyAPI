@@ -23,7 +23,7 @@ type clientAPIKeyContextKey struct{}
 
 // clientAPIKeyMiddleware injects the authenticated client API key from gin.Context["apiKey"]
 // into the request context so that SecretSource can look it up for per-client upstream routing.
-func clientAPIKeyMiddleware() gin.HandlerFunc {
+func clientAPIKeyMiddleware(allowedModelsResolver func(apiKey string) []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Extract the client API key from gin context (set by AuthMiddleware)
 		if apiKey, exists := c.Get("apiKey"); exists {
@@ -31,6 +31,11 @@ func clientAPIKeyMiddleware() gin.HandlerFunc {
 				// Inject into request context for SecretSource.Get(ctx) to read
 				ctx := context.WithValue(c.Request.Context(), clientAPIKeyContextKey{}, keyStr)
 				c.Request = c.Request.WithContext(ctx)
+				if allowedModelsResolver != nil {
+					if allowed := allowedModelsResolver(keyStr); len(allowed) > 0 {
+						c.Set("apiKeyAllowedModels", allowed)
+					}
+				}
 			}
 		}
 		c.Next()
@@ -282,7 +287,8 @@ func (m *AmpModule) registerProviderAliases(engine *gin.Engine, baseHandler *han
 		ampProviders.Use(auth)
 	}
 	// Inject client API key into request context for per-client upstream routing
-	ampProviders.Use(clientAPIKeyMiddleware())
+	// and apply per-key model allowlist context for model listing handlers.
+	ampProviders.Use(clientAPIKeyMiddleware(m.allowedModelsResolver))
 
 	provider := ampProviders.Group("/:provider")
 

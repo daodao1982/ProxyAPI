@@ -25,14 +25,15 @@ type Option func(*AmpModule)
 //   - Automatic gzip decompression for misconfigured upstreams
 //   - Model mapping for routing unavailable models to alternatives
 type AmpModule struct {
-	secretSource    SecretSource
-	proxy           *httputil.ReverseProxy
-	proxyMu         sync.RWMutex // protects proxy for hot-reload
-	accessManager   *sdkaccess.Manager
-	authMiddleware_ gin.HandlerFunc
-	modelMapper     *DefaultModelMapper
-	enabled         bool
-	registerOnce    sync.Once
+	secretSource          SecretSource
+	proxy                 *httputil.ReverseProxy
+	proxyMu               sync.RWMutex // protects proxy for hot-reload
+	accessManager         *sdkaccess.Manager
+	authMiddleware_       gin.HandlerFunc
+	allowedModelsResolver func(apiKey string) []string
+	modelMapper           *DefaultModelMapper
+	enabled               bool
+	registerOnce          sync.Once
 
 	// restrictToLocalhost controls localhost-only access for management routes (hot-reloadable)
 	restrictToLocalhost bool
@@ -92,6 +93,13 @@ func WithAccessManager(am *sdkaccess.Manager) Option {
 func WithAuthMiddleware(middleware gin.HandlerFunc) Option {
 	return func(m *AmpModule) {
 		m.authMiddleware_ = middleware
+	}
+}
+
+// WithAllowedModelsResolver injects a resolver for per-API-key model allowlist.
+func WithAllowedModelsResolver(resolver func(apiKey string) []string) Option {
+	return func(m *AmpModule) {
+		m.allowedModelsResolver = resolver
 	}
 }
 
