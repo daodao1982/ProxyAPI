@@ -1086,6 +1086,7 @@ func (s *Server) apiKeyModelGuardMiddleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		c.Set("apiKeyAllowedModels", allowed)
 
 		requested := extractRequestedModel(c)
 		if requested == "" {

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
@@ -130,19 +131,44 @@ func (h *ClaudeCodeAPIHandler) ClaudeCountTokens(c *gin.Context) {
 //   - c: The Gin context for the request.
 func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
 	models := h.Models()
+
+	allowedSet := map[string]struct{}{}
+	if v, ok := c.Get("apiKeyAllowedModels"); ok {
+		if allowed, ok := v.([]string); ok {
+			for _, item := range allowed {
+				trimmed := strings.TrimSpace(item)
+				if trimmed == "" {
+					continue
+				}
+				allowedSet[trimmed] = struct{}{}
+			}
+		}
+	}
+
+	filteredModels := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		id, _ := model["id"].(string)
+		if len(allowedSet) > 0 {
+			if _, exists := allowedSet[strings.TrimSpace(id)]; !exists {
+				continue
+			}
+		}
+		filteredModels = append(filteredModels, model)
+	}
+
 	firstID := ""
 	lastID := ""
-	if len(models) > 0 {
-		if id, ok := models[0]["id"].(string); ok {
+	if len(filteredModels) > 0 {
+		if id, ok := filteredModels[0]["id"].(string); ok {
 			firstID = id
 		}
-		if id, ok := models[len(models)-1]["id"].(string); ok {
+		if id, ok := filteredModels[len(filteredModels)-1]["id"].(string); ok {
 			lastID = id
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"data":     models,
+		"data":     filteredModels,
 		"has_more": false,
 		"first_id": firstID,
 		"last_id":  lastID,

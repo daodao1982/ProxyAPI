@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -62,9 +63,28 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 	// Get all available models
 	allModels := h.Models()
 
-	// Filter to only include the 4 required fields: id, object, created, owned_by
-	filteredModels := make([]map[string]any, len(allModels))
-	for i, model := range allModels {
+	allowedSet := map[string]struct{}{}
+	if v, ok := c.Get("apiKeyAllowedModels"); ok {
+		if allowed, ok := v.([]string); ok {
+			for _, item := range allowed {
+				trimmed := strings.TrimSpace(item)
+				if trimmed == "" {
+					continue
+				}
+				allowedSet[trimmed] = struct{}{}
+			}
+		}
+	}
+
+	filteredModels := make([]map[string]any, 0, len(allModels))
+	for _, model := range allModels {
+		id, _ := model["id"].(string)
+		if len(allowedSet) > 0 {
+			if _, exists := allowedSet[strings.TrimSpace(id)]; !exists {
+				continue
+			}
+		}
+
 		filteredModel := map[string]any{
 			"id":     model["id"],
 			"object": model["object"],
@@ -80,7 +100,7 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 			filteredModel["owned_by"] = ownedBy
 		}
 
-		filteredModels[i] = filteredModel
+		filteredModels = append(filteredModels, filteredModel)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
