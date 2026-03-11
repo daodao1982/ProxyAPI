@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -49,6 +51,7 @@ type Handler struct {
 	logDir              string
 	postAuthHook        coreauth.PostAuthHook
 	keyLifecycle        *apiKeyLifecycleStore
+	healthChecker       *modelHealthChecker
 }
 
 // NewHandler creates a new management handler instance.
@@ -66,6 +69,7 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		allowRemoteOverride: envSecret != "",
 		envSecret:           envSecret,
 		keyLifecycle:        newAPIKeyLifecycleStore(configFilePath),
+		healthChecker:       newModelHealthChecker(manager),
 	}
 	h.startAttemptCleanup()
 	h.startAPIKeyLifecycleWorker()
@@ -111,7 +115,12 @@ func NewHandlerWithoutConfigFilePath(cfg *config.Config, manager *coreauth.Manag
 func (h *Handler) SetConfig(cfg *config.Config) { h.cfg = cfg }
 
 // SetAuthManager updates the auth manager reference used by management endpoints.
-func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = manager }
+func (h *Handler) SetAuthManager(manager *coreauth.Manager) {
+	h.authManager = manager
+	if h.healthChecker != nil {
+		h.healthChecker.SetManager(manager)
+	}
+}
 
 // SetUsageStatistics allows replacing the usage statistics reference.
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
