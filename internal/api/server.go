@@ -179,6 +179,11 @@ type Server struct {
 	keepAliveOnTimeout func()
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
+
+	usagePersistStop     chan struct{}
+	usagePersistDone     chan struct{}
+	usagePersistPath     string
+	usagePersistInterval time.Duration
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -275,6 +280,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		s.mgmt.SetPostAuthHook(optionState.postAuthHook)
 	}
 	s.localPassword = optionState.localPassword
+
+	s.startUsagePersistence()
 
 	// Setup routes
 	s.setupRoutes()
@@ -844,6 +851,9 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Stop usage persistence (flushes snapshot).
+	s.stopUsagePersistence(ctx)
+
 	// Shutdown the HTTP server.
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
@@ -851,6 +861,85 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	log.Debug("API server stopped")
 	return nil
+}
+
+func (s *Server) startUsagePersistence() {
+	if s == nil || s.cfg == nil {
+		return
+	}
+	path := strings.TrimSpace(s.cfg.UsageStatisticsPersistPath)
+	if path == "" {
+		return
+	}
+	interval := time.Duration(s.cfg.UsageStatisticsPersistIntervalSeconds) * time.Second
+	if interval <= 0 {
+		return
+	}
+
+	s.usagePersistPath = path
+	s.usagePersistInterval = interval
+
+	if snapshot, ok, err := usage.LoadSnapshotFromFile(path); err != nil {
+		log.Errorf("failed to load usage snapshot from %s: %v", path, err)
+	} else if ok {
+		stats := usage.GetRequestStatistics()
+		if stats != nil {
+			result := stats.MergeSnapshot(snapshot)
+			log.Infof("loaded usage snapshot from %s (added %d, skipped %d)", path, result.Added, result.Skipped)
+		}
+	}
+
+	s.usagePersistStop = make(chan struct{}, 1)
+	s.usagePersistDone = make(chan struct{})
+	go func() {
+		defer close(s.usagePersistDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.persistUsageSnapshot()
+			case <-s.usagePersistStop:
+				s.persistUsageSnapshot()
+				return
+			}
+		}
+	}()
+}
+
+func (s *Server) stopUsagePersistence(ctx context.Context) {
+	if s == nil || s.usagePersistStop == nil {
+		return
+	}
+	select {
+	case s.usagePersistStop <- struct{}{}:
+	default:
+	}
+	if s.usagePersistDone == nil {
+		return
+	}
+	if ctx == nil {
+		<-s.usagePersistDone
+		return
+	}
+	select {
+	case <-s.usagePersistDone:
+	case <-ctx.Done():
+	}
+}
+
+func (s *Server) persistUsageSnapshot() {
+	if s == nil || s.usagePersistPath == "" {
+		return
+	}
+	stats := usage.GetRequestStatistics()
+	if stats == nil {
+		return
+	}
+	snapshot := stats.Snapshot()
+	if err := usage.SaveSnapshotToFile(s.usagePersistPath, snapshot); err != nil {
+		log.Errorf("failed to persist usage snapshot to %s: %v", s.usagePersistPath, err)
+	}
 }
 
 // corsMiddleware returns a Gin middleware handler that adds CORS headers

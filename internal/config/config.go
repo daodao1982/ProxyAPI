@@ -64,6 +64,14 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
+	// UsageStatisticsPersistPath defines a JSON file path to persist usage statistics snapshots.
+	// Leave empty to disable persistence.
+	UsageStatisticsPersistPath string `yaml:"usage-statistics-persist-path" json:"usage-statistics-persist-path"`
+
+	// UsageStatisticsPersistIntervalSeconds controls how often snapshots are saved to disk.
+	// Set to 0 to disable periodic persistence.
+	UsageStatisticsPersistIntervalSeconds int `yaml:"usage-statistics-persist-interval-seconds" json:"usage-statistics-persist-interval-seconds"`
+
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
@@ -553,6 +561,8 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.LogsMaxTotalSizeMB = 0
 	cfg.ErrorLogsMaxFiles = 10
 	cfg.UsageStatisticsEnabled = false
+	cfg.UsageStatisticsPersistPath = ""
+	cfg.UsageStatisticsPersistIntervalSeconds = 300
 	cfg.DisableCooling = false
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
@@ -612,6 +622,10 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	if cfg.ErrorLogsMaxFiles < 0 {
 		cfg.ErrorLogsMaxFiles = 10
+	}
+
+	if cfg.UsageStatisticsPersistIntervalSeconds < 0 {
+		cfg.UsageStatisticsPersistIntervalSeconds = 0
 	}
 
 	if cfg.MaxRetryCredentials < 0 {
