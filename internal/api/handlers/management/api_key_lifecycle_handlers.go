@@ -34,8 +34,14 @@ func parseLifecyclePreset(preset string, expiresAtRaw *string) (*string, *time.T
 	case apiKeyPreset12h:
 		t := now.Add(12 * time.Hour)
 		return &p, &t, nil
+	case apiKeyPreset24h:
+		t := now.Add(24 * time.Hour)
+		return &p, &t, nil
 	case apiKeyPreset7d:
 		t := now.Add(7 * 24 * time.Hour)
+		return &p, &t, nil
+	case apiKeyPreset30d:
+		t := now.Add(30 * 24 * time.Hour)
 		return &p, &t, nil
 	case apiKeyPresetPermanent:
 		return &p, nil, nil

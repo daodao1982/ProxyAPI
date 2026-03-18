@@ -13,7 +13,9 @@ import (
 
 const (
 	apiKeyPreset12h       = "12h"
+	apiKeyPreset24h       = "24h"
 	apiKeyPreset7d        = "7d"
+	apiKeyPreset30d       = "30d"
 	apiKeyPresetCustom    = "custom"
 	apiKeyPresetPermanent = "permanent"
 )
