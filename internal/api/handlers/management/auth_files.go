@@ -524,6 +524,20 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	
+	// 获取新的选项参数
+	expirationOption := c.PostForm("expirationOption")
+	customExpirationHours := c.PostForm("customExpirationHours")
+	allowedModelsJSON := c.PostForm("allowedModels")
+	
+	// 解析 allowedModels
+	var allowedModels []string
+	if allowedModelsJSON != "" {
+		if err := json.Unmarshal([]byte(allowedModelsJSON), &allowedModels); err != nil {
+			log.Warnf("failed to parse allowedModels: %v", err)
+		}
+	}
+	
 	if file, err := c.FormFile("file"); err == nil && file != nil {
 		name := filepath.Base(file.Filename)
 		if !strings.HasSuffix(strings.ToLower(name), ".json") {
@@ -544,6 +558,14 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		if errRead != nil {
 			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read saved file: %v", errRead)})
 			return
+		}
+		// 处理新参数并保存到文件
+		if expirationOption != "" || len(allowedModels) > 0 {
+			if err := h.updateAuthFileMetadata(dst, data, expirationOption, customExpirationHours, allowedModels); err != nil {
+				log.Warnf("failed to update auth file metadata: %v", err)
+			} else {
+				data, _ = os.ReadFile(dst) // 重新读取更新后的数据
+			}
 		}
 		if errReg := h.registerAuthFromFile(ctx, dst, data); errReg != nil {
 			c.JSON(500, gin.H{"error": errReg.Error()})
@@ -572,6 +594,12 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 			dst = abs
 		}
 	}
+	// 处理新参数
+	if expirationOption != "" || len(allowedModels) > 0 {
+		if err := h.updateAuthFileMetadata(dst, data, expirationOption, customExpirationHours, allowedModels); err != nil {
+			log.Warnf("failed to update auth file metadata: %v", err)
+		}
+	}
 	if errWrite := os.WriteFile(dst, data, 0o600); errWrite != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("failed to write file: %v", errWrite)})
 		return
@@ -581,6 +609,67 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"status": "ok"})
+}
+
+// updateAuthFileMetadata 更新认证文件的 metadata
+func (h *Handler) updateAuthFileMetadata(path string, data []byte, expirationOption, customExpirationHours string, allowedModels []string) error {
+	var authData map[string]interface{}
+	if err := json.Unmarshal(data, &authData); err != nil {
+		return fmt.Errorf("failed to parse JSON: %v", err)
+	}
+	
+	metadata := make(map[string]interface{})
+	
+	// 处理有效期
+	if expirationOption != "" && expirationOption != "never" {
+		var hours int
+		if expirationOption == "12h" {
+			hours = 12
+		} else if expirationOption == "24h" {
+			hours = 24
+		} else if expirationOption == "30d" {
+			hours = 30 * 24
+		} else if expirationOption == "custom" && customExpirationHours != "" {
+			if parsed, err := strconv.Atoi(customExpirationHours); err == nil {
+				hours = parsed
+			}
+		}
+		
+		if hours > 0 {
+			expirationTime := time.Now().Add(time.Duration(hours) * time.Hour)
+			metadata["expiration"] = expirationTime.Format(time.RFC3339)
+			metadata["expirationOption"] = expirationOption
+		}
+	} else if expirationOption == "never" {
+		metadata["expiration"] = nil
+		metadata["expirationOption"] = "never"
+	}
+	
+	// 处理模型限制
+	if len(allowedModels) > 0 {
+		metadata["allowedModels"] = allowedModels
+	} else {
+		// 空数组表示全部可用
+		metadata["allowedModels"] = []string{}
+	}
+	
+	// 合并 metadata 到 authData
+	for k, v := range metadata {
+		authData[k] = v
+	}
+	
+	// 写回文件
+	updatedData, err := json.MarshalIndent(authData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated data: %v", err)
+	}
+	
+	if err := os.WriteFile(path, updatedData, 0o600); err != nil {
+		return fmt.Errorf("failed to write updated file: %v", err)
+	}
+	
+	log.Infof("updated auth file metadata: expiration=%s, allowedModels=%v", metadata["expiration"], metadata["allowedModels"])
+	return nil
 }
 
 // Delete auth files: single by name or all
